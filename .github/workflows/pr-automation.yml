@@ -1,0 +1,206 @@
+name: Pull Request Automation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  code-quality:
+    name: code-quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
+
+      - name: Install project dependencies
+        run: npm ci
+
+      - name: Execute ESLint checks
+        id: eslint
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Execute Prettier formatting check
+        id: prettier
+        run: npx prettier --check .
+        continue-on-error: true
+
+      - name: Post Code Quality Report to PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const eslintStatus = `${{ steps.eslint.outcome }}` === 'success' ? '✅ Passed' : '❌ Failed';
+            const prettierStatus = `${{ steps.prettier.outcome }}` === 'success' ? '✅ Passed' : '❌ Failed';
+            
+            const commentBody = `### Code Quality Report
+            **ESLint Check**: ${eslintStatus}
+            **Prettier Formatting**: ${prettierStatus}
+            
+            *Note: Fix any failures before merging.*`;
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: commentBody
+            });
+
+  testing-suite:
+    name: testing-suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
+
+      - name: Install project dependencies
+        run: npm ci
+
+      - name: Run full test suite with coverage
+        id: test-suite
+        run: npm test -- --coverage
+        continue-on-error: true
+
+      - name: Post Test Coverage Report to PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const testStatus = `${{ steps.test-suite.outcome }}` === 'success' ? '✅ All tests passed' : '❌ Some tests failed';
+            
+            const commentBody = `### Test Coverage Report
+            ${testStatus}
+            
+            *Full coverage artifacts are attached to this workflow run.*`;
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: commentBody
+            });
+
+      - name: Upload test coverage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-coverage-report
+          path: coverage/
+          if-no-files-found: warn
+
+  security-scan:
+    name: security-scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
+
+      - name: Install project dependencies
+        run: npm ci
+
+      - name: Scan for dependency vulnerabilities
+        id: dependency-scan
+        run: npm audit --audit-level=moderate
+        continue-on-error: true
+
+      - name: Scan for exposed secrets in code
+        id: secret-scan
+        uses: trufflesecurity/trufflehog@v3
+        with:
+          path: ./
+          extra_args: --only-verified
+        continue-on-error: true
+
+      - name: Post Security Scan Report to PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const dependencyStatus = `${{ steps.dependency-scan.outcome }}` === 'success' ? '✅ No moderate/high vulnerabilities' : '❌ Vulnerabilities found in dependencies';
+            const secretStatus = `${{ steps.secret-scan.outcome }}` === 'success' ? '✅ No verified secrets detected' : '❌ Verified secrets found in code';
+            
+            const commentBody = `### Security Scan Report
+            **Dependency Vulnerabilities**: ${dependencyStatus}
+            **Secret Exposure**: ${secretStatus}
+            
+            *Note: Resolve vulnerabilities and remove exposed secrets before merging.*`;
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: commentBody
+            });
+
+  build-validation:
+    name: build-validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
+
+      - name: Install project dependencies
+        run: npm ci
+
+      - name: Build the application
+        id: build-app
+        run: npm run build
+        continue-on-error: true
+
+      - name: Validate build output (basic check)
+        id: validate-build
+        run: |
+          if [ -d "dist" ]; then
+            echo "✅ Build directory (dist/) exists"
+          else
+            echo "❌ Build directory (dist/) missing - build failed"
+            exit 1
+          fi
+        continue-on-error: true
+
+      - name: Post Build Validation Report to PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const buildStatus = `${{ steps.build-app.outcome }}` === 'success' ? '✅ Application built successfully' : '❌ Application build failed';
+            const validateStatus = `${{ steps.validate-build.outcome }}` === 'success' ? '✅ Build output validated' : '❌ Build output validation failed';
+            
+            const commentBody = `### Build Validation
+            **Build Status**: ${buildStatus}
+            **Output Validation**: ${validateStatus}
+            
+            *Build artifacts are attached to this workflow run.*`;
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: commentBody
+            });
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: application-build
+          path: dist/
+          if-no-files-found: warn
